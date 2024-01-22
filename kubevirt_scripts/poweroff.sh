@@ -11,7 +11,10 @@ set -ux
 export VM_NAME=$(echo $BMC_ENDPOINT | awk -F "_" '{print $1}')
 export VM_NAMESPACE=$(echo $BMC_ENDPOINT | awk -F "_" '{print $2}')
 
-export KUBECONFIG=/var/tmp/kubeconfig
+if [[ -r /var/tmp/kubeconfig ]]; then
+    export KUBECONFIG=/var/tmp/kubeconfig
+fi
+
 VM_RUNNING=$(oc -n ${VM_NAMESPACE} get vm ${VM_NAME} -o jsonpath='{.spec.running}')
 if [ $? -eq 1 ]; then
   echo "Failed to get VM power state."

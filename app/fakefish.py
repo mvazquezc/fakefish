@@ -29,6 +29,7 @@ def system_collection_resource():
 @app.route('/redfish/v1/Systems/1', methods=['GET', 'PATCH'])
 def system_resource():
     username, password = get_credentials(flask.request)
+    global power_state
     global bmc_ip
     if flask.request.method == 'GET':
        return flask.render_template(
@@ -100,6 +101,7 @@ def virtualmedia_collection_resource():
 
 @app.route('/redfish/v1/Managers/1/VirtualMedia/Cd', methods=['GET'])
 def virtualmedia_cd_resource():
+    global inserted
     return flask.render_template(
         'virtualmedia_cd.json',
         inserted=inserted,
