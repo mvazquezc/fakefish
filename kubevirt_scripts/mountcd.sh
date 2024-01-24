@@ -10,8 +10,17 @@ set -ux
 #### BMC_PASSWORD - Has the password configured in the BMH/InstallConfig and that is used to access BMC_ENDPOINT
 
 ISO=${1}
-CLUSTER_STORAGE_CLASS=ocs-storagecluster-ceph-rbd
 IS_HTTPS=false
+
+if [[ -r /var/tmp/kubeconfig ]]; then
+    export KUBECONFIG=/var/tmp/kubeconfig
+fi
+
+VM_NAME=$(echo $BMC_ENDPOINT | awk -F "_" '{print $1}')
+VM_NAMESPACE=$(echo $BMC_ENDPOINT | awk -F "_" '{print $2}')
+
+DEFAULT_SC=$(oc get sc | awk '/(default)/ {print $1}')
+CLUSTER_STORAGE_CLASS=${CLUSTER_STORAGE_CLASS:-${DEFAULT_SC}}
 
 PVC_SPEC=$(cat <<EOF
   spec:
@@ -39,11 +48,6 @@ then
   fi
   IS_HTTPS=true
 fi
-
-export VM_NAME=$(echo $BMC_ENDPOINT | awk -F "_" '{print $1}')
-export VM_NAMESPACE=$(echo $BMC_ENDPOINT | awk -F "_" '{print $2}')
-
-export KUBECONFIG=/var/tmp/kubeconfig
 
 # we need to poweroff the VM if it's running
 VM_RUNNING=$(oc -n ${VM_NAMESPACE} get vm ${VM_NAME} -o jsonpath='{.spec.running}')
@@ -130,17 +134,18 @@ do
   fi
 done
 
-NUM_VOLUMES=$(oc -n ${VM_NAMESPACE} get vm ${VM_NAME} -o jsonpath='{.spec.template.spec.volumes[*].name}' | tr " " ";" | grep -o ";" | wc -l)
-if [ $? -eq 1 ]; then
+NUM_VOLUMES=( $(oc -n ${VM_NAMESPACE} get vm ${VM_NAME} -o jsonpath='{.spec.template.spec.volumes[*].name}') )
+if [[ $? -eq 1 ]]; then
   echo "Failed to get VM volumes."
   exit 1
 fi
+
 
 cat <<EOF > /tmp/${VM_NAME}.patch
 [
   {
     "op": "add",
-    "path": "/spec/template/spec/volumes/$((NUM_VOLUMES + 1))",
+    "path": "/spec/template/spec/volumes/${#NUM_VOLUMES[@]}",
     "value": {
       "name": "${VM_NAME}-bootiso",
       "persistentVolumeClaim": {
@@ -152,14 +157,13 @@ cat <<EOF > /tmp/${VM_NAME}.patch
 EOF
 
 # Add it to VM object if it doesn't exist
-VOLUME_EXIST=$(oc -n ${VM_NAMESPACE} get vm ${VM_NAME} -o jsonpath='{.spec.template.spec.volumes[*].name}' | grep -c "${VM_NAME}-bootiso")
-if [ $? -eq 1 ]; then
+VOLUME_EXIST=$(oc -n ${VM_NAMESPACE} get vm ${VM_NAME} -o jsonpath='{.spec.template.spec.volumes[*].name}' | grep -c "${VM_NAME}-bootiso"; exit ${PIPESTATUS[0]})
+if [[ $? -eq 1 ]]; then
   echo "Failed to get VM volumes."
   exit 1
 fi
 
-if [ ${VOLUME_EXIST} -eq 0 ]
-then
+if [ ${VOLUME_EXIST} -eq 0 ]; then
   oc -n ${VM_NAMESPACE} patch vm ${VM_NAME} --patch-file /tmp/${VM_NAME}.patch --type json
   if [ $? -eq 0 ]; then
     echo "Volume added to the VM"
@@ -172,8 +176,8 @@ else
 fi
 
 # We get the number of disks, since we need to delete the one we just added to fix the config
-NUM_DISK=$(oc -n ${VM_NAMESPACE} get vm ${VM_NAME} -o jsonpath='{.spec.template.spec.domain.devices.disks[*].name}' | tr " " ";" | grep -o ";" | wc -l)
-if [ $? -eq 1 ]; then
+NUM_DISK=( $(oc -n ${VM_NAMESPACE} get vm ${VM_NAME} -o jsonpath='{.spec.template.spec.domain.devices.disks[*].name}') )
+if [[ $? -eq 1 ]]; then
   echo "Failed to get VM disks."
   exit 1
 fi
@@ -182,9 +186,9 @@ cat <<EOF > /tmp/${VM_NAME}.patch
 [
   {
     "op": "add",
-    "path": "/spec/template/spec/domain/devices/disks/$((NUM_DISK + 1))",
+    "path": "/spec/template/spec/domain/devices/disks/${#NUM_DISK[@]}",
     "value": {
-      "bootOrder": $((NUM_DISK + 2)),
+      "bootOrder": $(( ${#NUM_DISK[@]} + 1 )),
       "cdrom": {
          "bus": "sata"
       },
@@ -195,14 +199,13 @@ cat <<EOF > /tmp/${VM_NAME}.patch
 EOF
 
 # Add it to VM object if it doesn't exist
-DISK_EXIST=$(oc -n ${VM_NAMESPACE} get vm ${VM_NAME} -o jsonpath='{.spec.template.spec.domain.devices.disks[*].name}' | grep -c "${VM_NAME}-bootiso")
-if [ $? -eq 1 ]; then
-  echo "Failed to get VM volumes."
+DISK_EXIST=$(oc -n ${VM_NAMESPACE} get vm ${VM_NAME} -o jsonpath='{.spec.template.spec.domain.devices.disks[*].name}' | grep -c "${VM_NAME}-bootiso"; exit ${PIPESTATUS[0]})
+if [[ $? -eq 1 ]]; then
+  echo "Failed to get VM Disks."
   exit 1
 fi
 
-if [ ${DISK_EXIST} -eq 0 ]
-then
+if [ ${DISK_EXIST} -eq 0 ]; then
   oc -n ${VM_NAMESPACE} patch vm ${VM_NAME} --patch-file /tmp/${VM_NAME}.patch --type json
   if [ $? -eq 0 ]; then
     echo "Disk added to the VM"
@@ -211,16 +214,14 @@ then
     exit 1
   fi
 else
-  echo "Volume already added to the VM"
+  echo "Disk already added to the VM"
 fi
 
 # If VM was running, restore it
-if [[ "${VM_WAS_RUNNING}" == "true" ]]
-then
+if [[ "${VM_WAS_RUNNING}" == "true" ]]; then
   virtctl -n ${VM_NAMESPACE} start ${VM_NAME}
   if [ $? -eq 1 ]; then
     echo "Failed to poweron VM."
   exit 1
   fi
 fi
-
